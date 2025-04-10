@@ -15,13 +15,19 @@ ZONES = [0, 1, 2, 3]
 ZONES_KB = [0, 1, 2]
 ZONES_NP = [3]
 
-
-
 def init_device():
-    # So that we don't get an USB device busy error
-    device = usb.core.find(idVendor=0x187c, idProduct=0x0550)
+    supportedProducts = [0x0550, 0x0551]
+    vid = 0x187C
+
+    # Find supported device
+    device = None
+    for pid in supportedProducts:
+        device = usb.core.find(idVendor=vid, idProduct=pid)
+        if device:
+            break
+
     if not device:
-        raise Exception('no such device was found. Do you have a RGB keyboard 187c:0550?')
+        raise Exception('No supported device was found. Do you have an RGB keyboard 187c:0550 or 187c:0551?')
 
     ep = device[0].interfaces()[0].endpoints()[0]
     i = device[0].interfaces()[0].bInterfaceNumber
@@ -30,9 +36,7 @@ def init_device():
         device.detach_kernel_driver(i)
 
     # Create the elc object
-    vid = 0x187C
-    pid = 0x0550
-    elc = Elc(vid, pid, debug=0)
+    elc = Elc(vid, device.idProduct, debug=0)
     return (elc, device)
 
 def apply_action(elc, red, green, blue, duration, tempo, animation=AC_CHARGING, effect=COLOR, zones=ZONES):
