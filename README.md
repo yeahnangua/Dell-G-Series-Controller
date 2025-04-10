@@ -8,7 +8,7 @@ A simple GUI app written in PyQt to control keyboard backlight, power mode and f
 | G15 5520         |  :white_check_mark:  | :white_check_mark: |
 | G15 5511         |  :white_check_mark:  | :white_check_mark: |
 | G16 7620         |  :white_check_mark:  | :white_check_mark: |
-| G16 7630         |  :white_check_mark:  | :grey_question:    |
+| G16 7630         |  :white_check_mark:  | :white_check_mark: |
 | Alienware M16 R1 |  :white_check_mark:  | :grey_question:    |
 
 
