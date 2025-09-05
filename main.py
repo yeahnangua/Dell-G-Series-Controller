@@ -21,6 +21,7 @@ class MainWindow(QWidget):
         self.is_dell_g_series = False
         self.is_keyboard_supported = True # True by default, in case of no root access, keyboard lights should be adjustable.
         self.model = 'Unknown'
+        self.tray_icon = None  # Will be set after tray icon is created
         try:
             self.logfile = open("/tmp/dell-g-series-controller.log","w")
             sys.stdout = self.logfile
@@ -337,30 +338,13 @@ class MainWindow(QWidget):
 
 
     def combobox_power(self):
-        self.fan1_boost.setValue(0)
-        self.fan2_boost.setValue(0)
-        self.settings.setValue("Power", self.combobox_mode_power.currentText())
-        choice = self.settings.value("Power", "USTT_Balanced")
-        message = ""
+        choice = self.combobox_mode_power.currentText()
+        self.settings.setValue("Power", choice)
+        self.apply_power_mode(choice)
         
-        # Set power mode
-        mode = self.power_modes_dict[choice]
-        self.acpi_call("set_power_mode",mode)
-        # Get current power mode to confirm
-        result = self.acpi_call("get_power_mode")
-        if (result == mode):   #Expected result
-            message = "Power mode set to {}.\n".format(choice)
-        else:
-            message = "Error! Command returned: {}, but expecting {}.\n".format(str(result),str(mode))
-        # Get G Mode
-        result = self.acpi_call("get_G_mode")
-        if (choice == "G Mode") != (result == "0x1"):  #Toggle G Mode if needed.
-            #Toggle G mode
-            result_toggle = self.acpi_call("toggle_G_mode")
-            if (("0x1" if choice == "G Mode" else "0x0") != result_toggle): 
-                message = message + "Expected to read G Mode = {} but read {}!\n".format(choice == "G Mode",result_toggle)
-
-        self.info_label.setText(message)
+        # 显示系统通知（仅当用户在GUI中手动切换时）
+        if self.tray_icon:
+            self.tray_icon.show_power_mode_notification(choice)
 
 
     def slider_fan1(self):
@@ -486,6 +470,61 @@ class MainWindow(QWidget):
         awelc.set_dim(100)
         self.settings.setValue("State", "Off")
 
+    def toggle_power_mode(self):
+        """切换电源模式，在 Balance 和 G Mode 之间切换"""
+        if not self.is_root or not self.is_dell_g_series:
+            return
+        
+        current_mode = self.settings.value("Power", "USTT_Balanced")
+        
+        # 在 Balance 和 G Mode 之间切换
+        if current_mode == "USTT_Balanced":
+            new_mode = "G Mode"
+        else:
+            new_mode = "USTT_Balanced"
+        
+        # 更新设置
+        self.settings.setValue("Power", new_mode)
+        
+        # 如果窗口可见，更新ComboBox（暂时断开信号避免重复触发）
+        if hasattr(self, 'combobox_mode_power'):
+            self.combobox_mode_power.currentTextChanged.disconnect()
+            self.combobox_mode_power.setCurrentText(new_mode)
+            self.combobox_mode_power.currentTextChanged.connect(self.combobox_power)
+        
+        # 应用新的电源模式
+        self.apply_power_mode(new_mode)
+        
+        # 显示系统通知
+        if self.tray_icon:
+            self.tray_icon.show_power_mode_notification(new_mode)
+    
+    def apply_power_mode(self, mode):
+        """应用指定的电源模式"""
+        if not self.is_root or not self.is_dell_g_series:
+            return
+        
+        # 重置风扇增强
+        if hasattr(self, 'fan1_boost'):
+            self.fan1_boost.setValue(0)
+        if hasattr(self, 'fan2_boost'):
+            self.fan2_boost.setValue(0)
+        
+        # 设置电源模式
+        mode_value = self.power_modes_dict[mode]
+        self.acpi_call("set_power_mode", mode_value)
+        
+        # 处理G模式
+        result = self.acpi_call("get_G_mode")
+        if (mode == "G Mode") != (result == "0x1"):  # 如果需要切换G模式
+            self.acpi_call("toggle_G_mode")
+        
+        # 显示消息（如果窗口可见且有info_label）
+        if hasattr(self, 'info_label') and self.isVisible():
+            self.info_label.setText(f"Power mode switched to {mode}")
+        
+        print(f"Power mode switched to {mode}")
+
 
 class TrayIcon(QSystemTrayIcon):
 
@@ -493,16 +532,19 @@ class TrayIcon(QSystemTrayIcon):
         super().__init__(*args, **kwargs)
         self.settings = QSettings('Dell-G15', 'Controller')
         self.state = (self.settings.value("State", "Off"))
-        self.activated.connect(self.toggle_leds)
+        self.activated.connect(self.toggle_power_mode)
         self.window = window
 
-    def toggle_leds(self, reason):
-        if self.settings.value("State", "Off") == "Off":
-            self.settings.setValue("State", "On")
-            self.window.tray_on()
-        else:
-            self.settings.setValue("State", "Off")
-            self.window.tray_off()
+    def toggle_power_mode(self, reason):
+        # 只在左键点击时切换电源模式
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.window.toggle_power_mode()
+    
+    def show_power_mode_notification(self, mode):
+        """显示电源模式切换通知"""
+        title = "Dell G Series Controller"
+        message = f"Power mode switched to: {mode}"
+        self.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 3000)
 
 if __name__ == '__main__':
     # Create the Qt Application
@@ -511,23 +553,26 @@ if __name__ == '__main__':
     app.setWindowIcon(icon)
     app.setQuitOnLastWindowClosed(False)
 
-    # Create and show the window
+    # Create the window (but don't show it initially)
     window = MainWindow()
-    window.show()
+    # window.show()  # Comment out to start minimized to tray
 
     # Add item on the system tray
     tray = TrayIcon(window)
     tray.setIcon(icon)
     tray.setVisible(True)
-    tray.setToolTip("Right click to see the menu. Left click to toggle leds.")
+    tray.setToolTip("Right click to see the menu. Left click to toggle power mode (Balance/G Mode).")
+    
+    # Set the tray icon reference in window for notifications
+    window.tray_icon = tray
 
     # System tray options
     menu = QMenu()
     show = QAction("Show Window")
-    boost_on = QAction("Boost on")
-    boost_off = QAction("Boost off")
+    toggle_power = QAction("Toggle Power Mode")
     quit = QAction("Quit")
     menu.addAction(show)
+    menu.addAction(toggle_power)
     menu.addAction(quit)
     # Adding options to the System Tray
     tray.setContextMenu(menu)
@@ -535,6 +580,7 @@ if __name__ == '__main__':
     # Register callbacks
     quit.triggered.connect(app.quit)
     show.triggered.connect(window.show)
+    toggle_power.triggered.connect(lambda: window.toggle_power_mode())
 
     # Run the main Qt loop
     sys.exit(app.exec())
